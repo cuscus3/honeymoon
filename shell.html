@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>R &amp; T</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1923;
+    color: #e8e6e1;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%;
+    max-width: 360px;
+    text-align: center;
+  }
+  .mark {
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #c4956a;
+    margin-bottom: 14px;
+  }
+  h1 {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+    color: #f5e6d3;
+  }
+  p.sub { font-size: 14px; color: #8fa3b0; margin-bottom: 28px; line-height:1.5; }
+  input {
+    width: 100%;
+    padding: 14px 16px;
+    font-size: 16px;
+    font-family: inherit;
+    color: #e8e6e1;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(196,149,106,0.35);
+    border-radius: 10px;
+    outline: none;
+    text-align: center;
+    letter-spacing: 1px;
+  }
+  input:focus { border-color: #c4956a; background: rgba(255,255,255,0.08); }
+  button {
+    width: 100%;
+    margin-top: 12px;
+    padding: 14px 16px;
+    font-size: 15px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: .5px;
+    color: #0f1923;
+    background: linear-gradient(135deg, #f5e6d3, #c4956a);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  .msg { margin-top: 16px; font-size: 13px; min-height: 18px; color: #d98b7a; }
+  .msg.working { color: #8fa3b0; }
+  .foot { margin-top: 34px; font-size: 11px; color: #47606f; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="mark">Private</div>
+  <h1>R &amp; T</h1>
+  <p class="sub">Enter the passcode to open the planner.</p>
+  <form id="f" autocomplete="on">
+    <input id="pw" type="password" name="password" placeholder="Passcode" autocomplete="current-password" autofocus>
+    <button id="go" type="submit">Unlock</button>
+  </form>
+  <div class="msg" id="msg"></div>
+  <div class="foot">&#9679; &#9679; &#9679;</div>
+</div>
+<script>
+(function () {
+  var DATA = /*__PAYLOAD__*/null;
+  var KEY = 'rt_pc_v1';
+  var f = document.getElementById('f'),
+      pw = document.getElementById('pw'),
+      go = document.getElementById('go'),
+      msg = document.getElementById('msg');
+
+  function b64(s) {
+    var raw = atob(s), n = raw.length, out = new Uint8Array(n);
+    for (var i = 0; i < n; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  function hex(buf) {
+    return Array.prototype.map.call(new Uint8Array(buf), function (b) {
+      return ('0' + b.toString(16)).slice(-2);
+    }).join('');
+  }
+
+  function unlock(pass, remember) {
+    msg.className = 'msg working';
+    msg.textContent = 'Unlocking…';
+    go.disabled = true;
+    var enc = new TextEncoder();
+    return crypto.subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveKey'])
+      .then(function (base) {
+        return crypto.subtle.deriveKey(
+          { name: 'PBKDF2', salt: b64(DATA.salt), iterations: DATA.iter, hash: 'SHA-256' },
+          base, { name: 'AES-CBC', length: 256 }, false, ['decrypt']);
+      })
+      .then(function (key) {
+        return crypto.subtle.decrypt({ name: 'AES-CBC', iv: b64(DATA.iv) }, key, b64(DATA.ct));
+      })
+      .then(function (plain) {
+        return crypto.subtle.digest('SHA-256', plain).then(function (d) {
+          if (hex(d) !== DATA.sha256) throw new Error('bad');
+          return new TextDecoder('utf-8').decode(plain);
+        });
+      })
+      .then(function (html) {
+        if (remember) { try { localStorage.setItem(KEY, pass); } catch (e) {} }
+        document.open();
+        document.write(html);
+        document.close();
+      })
+      .catch(function () {
+        try { localStorage.removeItem(KEY); } catch (e) {}
+        go.disabled = false;
+        msg.className = 'msg';
+        msg.textContent = 'That passcode didn’t work.';
+        pw.value = '';
+        pw.focus();
+      });
+  }
+
+  function submit(e) {
+    if (e) e.preventDefault();
+    if (pw.value && !go.disabled) unlock(pw.value, true);
+  }
+  f.addEventListener('submit', submit);
+  go.addEventListener('click', submit);
+  pw.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.keyCode === 13) submit(e);
+  });
+
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  if (saved) unlock(saved, false);
+})();
+</script>
+</body>
+</html>
