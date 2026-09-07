@@ -1,4 +1,4 @@
-# rt-planner
+# honeymoon
 
 An encrypted static page. The only thing stored here is AES-256-CBC ciphertext;
 the plaintext never enters this repository or its history.
