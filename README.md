@@ -1,7 +1,22 @@
 # honeymoon
 
-An encrypted static page. The only thing stored here is AES-256-CBC ciphertext;
-the plaintext never enters this repository or its history.
+An encrypted static page. The repo holds AES-256-CBC ciphertext only; no
+plaintext of the planner is ever committed, and none is in the git history.
+
+## Two passcodes, two different documents
+
+| Passcode file      | Who        | What they get |
+|--------------------|------------|---------------|
+| `.passcode`        | Ryan/Tanya | The whole master file — every price, every points balance, every booking code |
+| `.passcode-guest`  | Friends & family | Costs, points and booking references removed; the Cards tab dropped entirely |
+
+These are two **independent encrypted payloads**, not one page with things
+hidden by CSS. The guest payload is built from a genuinely different HTML
+document, so the numbers are not present in the bytes a guest can decrypt.
+Nobody gets at them by opening View Source.
+
+Registry gift prices (`$360 registry`) are the deliberate exception — the page
+invites friends to chip in toward those, so they stay visible in both versions.
 
 ## Publishing an update
 
@@ -11,22 +26,29 @@ After editing `../honeymoon_itinerary_master.html`:
 ./publish.sh
 ```
 
-That re-encrypts the master file into `docs/index.html`, commits, and pushes.
-GitHub Pages serves it about a minute later.
+Re-runs the redactor, re-encrypts both payloads, commits, pushes. Live in ~1 min.
 
-## Changing the passcode
+## Changing a passcode
 
 ```bash
-./publish.sh 'new passcode here'
+./publish.sh 'newfullpass' 'newguestpass'
 ```
 
-The passcode is cached in `.passcode` (gitignored, chmod 600) so plain
-`./publish.sh` keeps using it.
+Both are cached in `.passcode` / `.passcode-guest` (gitignored, chmod 600), so a
+plain `./publish.sh` keeps using them.
 
-## How the gate works
+## The redactor
 
-- PBKDF2-HMAC-SHA256, 250,000 iterations, random 16-byte salt -> 256-bit key
-- AES-256-CBC with a random IV
-- SHA-256 of the plaintext is checked after decryption to confirm the passcode
-- Decryption happens in the browser via WebCrypto; the passcode is never sent anywhere
-- The unlocked passcode is kept in `localStorage`, so a visitor types it once per device
+`redact.py` builds the guest document. It removes:
+
+- every `$`, `IDR`, `NNK` points and `N,NNN pts` figure
+- every booking reference, collected structurally from `data-copy="..."`
+  attributes, so a booking added to the master is redacted automatically
+- the personal email and the villa host's private WhatsApp number
+- the whole Cards (points strategy) tab
+
+It then **verifies its own output** and refuses to write the guest file if any
+money-shaped string survived. That check is the real safety net — if you add a
+cost in a format it doesn't recognise, the build fails loudly instead of
+quietly publishing the number. Run `python3 redact.py <in> <out> --report` to
+see exactly what was caught.

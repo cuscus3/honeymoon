@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# Encrypt the honeymoon master HTML into docs/index.html (passcode-gated static page).
-#   ./build.sh              -> uses the passcode saved in .passcode (or prompts)
-#   ./build.sh "newpasscode" -> uses/saves a different one
+# Encrypt the planner into docs/index.html as TWO independent payloads:
+#   full  — the whole master file            (unlocked by .passcode)
+#   guest — costs and booking refs removed   (unlocked by .passcode-guest)
+# The guest payload is a genuinely different document: the numbers are not in
+# it, so they cannot be recovered from the published page by any means.
+#
+#   ./build.sh                    use the saved passcodes
+#   ./build.sh FULLPASS GUESTPASS set/replace them
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,37 +15,44 @@ TPL="$HERE/shell.html"
 OUT="$HERE/docs/index.html"
 ITER=250000
 
-PASS="${1:-}"
-if [ -z "$PASS" ]; then
-  if [ -f "$HERE/.passcode" ]; then
-    PASS="$(cat "$HERE/.passcode")"
-  else
-    read -r -s -p "Passcode: " PASS; echo
-  fi
-else
-  printf '%s' "$PASS" > "$HERE/.passcode"; chmod 600 "$HERE/.passcode"
-fi
-[ -n "$PASS" ] || { echo "error: empty passcode" >&2; exit 1; }
-[ -f "$SRC" ]  || { echo "error: missing $SRC" >&2; exit 1; }
-
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-SALT_HEX="$(openssl rand -hex 16)"
-IV_HEX="$(openssl rand -hex 16)"
-PASS_HEX="$(printf '%s' "$PASS" | xxd -p -c 4096 | tr -d '\n')"
-KEY_HEX="$(openssl kdf -keylen 32 -kdfopt digest:SHA256 \
-             -kdfopt hexpass:"$PASS_HEX" -kdfopt hexsalt:"$SALT_HEX" \
-             -kdfopt iter:"$ITER" -binary PBKDF2 | xxd -p -c 4096 | tr -d '\n')"
+read_pass() {   # $1=file  $2=cli value  $3=prompt
+  local f="$HERE/$1"
+  if [ -n "${2:-}" ]; then printf '%s' "$2" > "$f"; chmod 600 "$f"; fi
+  [ -f "$f" ] || { read -r -s -p "$3: " v; echo; printf '%s' "$v" > "$f"; chmod 600 "$f"; }
+  cat "$f"
+}
+FULL_PASS="$(read_pass .passcode       "${1:-}" 'Full passcode')"
+GUEST_PASS="$(read_pass .passcode-guest "${2:-}" 'Guest passcode')"
+[ -n "$FULL_PASS" ] && [ -n "$GUEST_PASS" ] || { echo "error: empty passcode" >&2; exit 1; }
+[ "$FULL_PASS" != "$GUEST_PASS" ] || { echo "error: the two passcodes must differ" >&2; exit 1; }
+[ -f "$SRC" ] || { echo "error: missing $SRC" >&2; exit 1; }
 
-openssl enc -aes-256-cbc -K "$KEY_HEX" -iv "$IV_HEX" -in "$SRC" -out "$TMP/ct.bin"
+# --- guest variant (aborts if any money-shaped string survives) --------------
+echo "Building guest variant:"
+python3 "$HERE/redact.py" "$SRC" "$TMP/guest.html" --report
 
-CT_B64="$(base64 < "$TMP/ct.bin" | tr -d '\n')"
-SALT_B64="$(printf '%s' "$SALT_HEX" | xxd -r -p | base64 | tr -d '\n')"
-IV_B64="$(printf '%s' "$IV_HEX" | xxd -r -p | base64 | tr -d '\n')"
-SHA="$(openssl dgst -sha256 -hex < "$SRC" | awk '{print $NF}')"
+encrypt_one() {   # $1=plaintext file  $2=passcode  -> JSON object on stdout
+  local salt iv key ct sha
+  salt="$(openssl rand -hex 16)"; iv="$(openssl rand -hex 16)"
+  key="$(openssl kdf -keylen 32 -kdfopt digest:SHA256 \
+          -kdfopt hexpass:"$(printf '%s' "$2" | xxd -p -c 4096 | tr -d '\n')" \
+          -kdfopt hexsalt:"$salt" -kdfopt iter:"$ITER" -binary PBKDF2 \
+        | xxd -p -c 4096 | tr -d '\n')"
+  openssl enc -aes-256-cbc -K "$key" -iv "$iv" -in "$1" -out "$1.enc"
+  ct="$(base64 < "$1.enc" | tr -d '\n')"
+  sha="$(openssl dgst -sha256 -hex < "$1" | awk '{print $NF}')"
+  printf '{"salt":"%s","iv":"%s","iter":%s,"sha256":"%s","ct":"%s"}' \
+    "$(printf '%s' "$salt" | xxd -r -p | base64 | tr -d '\n')" \
+    "$(printf '%s' "$iv"   | xxd -r -p | base64 | tr -d '\n')" \
+    "$ITER" "$sha" "$ct"
+}
 
-printf '{"salt":"%s","iv":"%s","iter":%s,"sha256":"%s","ct":"%s"}' \
-  "$SALT_B64" "$IV_B64" "$ITER" "$SHA" "$CT_B64" > "$TMP/payload.json"
+cp "$SRC" "$TMP/full.html"
+{ printf '{"full":';  encrypt_one "$TMP/full.html"  "$FULL_PASS"
+  printf ',"guest":'; encrypt_one "$TMP/guest.html" "$GUEST_PASS"
+  printf '}'; } > "$TMP/payload.json"
 
 mkdir -p "$HERE/docs"
 python3 - "$TPL" "$TMP/payload.json" "$OUT" <<'PY'

@@ -4,7 +4,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 "$HERE/build.sh" "$@"
 cd "$HERE"
-git add -A docs
+git add -A            # tooling too, not just the built page
 if git diff --cached --quiet; then
   echo "no changes to publish"
 else

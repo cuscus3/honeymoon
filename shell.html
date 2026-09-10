@@ -105,26 +105,35 @@
     }).join('');
   }
 
-  function unlock(pass, remember) {
-    msg.className = 'msg working';
-    msg.textContent = 'Unlocking…';
-    go.disabled = true;
+  // Two independent payloads. Whichever passcode is typed decrypts the one it
+  // belongs to; the other stays ciphertext, so a guest passcode cannot reach
+  // the numbers even with the whole page in hand.
+  function attempt(which, pass) {
+    var D = DATA[which];
     var enc = new TextEncoder();
     return crypto.subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveKey'])
       .then(function (base) {
         return crypto.subtle.deriveKey(
-          { name: 'PBKDF2', salt: b64(DATA.salt), iterations: DATA.iter, hash: 'SHA-256' },
+          { name: 'PBKDF2', salt: b64(D.salt), iterations: D.iter, hash: 'SHA-256' },
           base, { name: 'AES-CBC', length: 256 }, false, ['decrypt']);
       })
       .then(function (key) {
-        return crypto.subtle.decrypt({ name: 'AES-CBC', iv: b64(DATA.iv) }, key, b64(DATA.ct));
+        return crypto.subtle.decrypt({ name: 'AES-CBC', iv: b64(D.iv) }, key, b64(D.ct));
       })
       .then(function (plain) {
         return crypto.subtle.digest('SHA-256', plain).then(function (d) {
-          if (hex(d) !== DATA.sha256) throw new Error('bad');
+          if (hex(d) !== D.sha256) throw new Error('bad');
           return new TextDecoder('utf-8').decode(plain);
         });
-      })
+      });
+  }
+
+  function unlock(pass, remember) {
+    msg.className = 'msg working';
+    msg.textContent = 'Unlocking\u2026';
+    go.disabled = true;
+    return attempt('full', pass)
+      .catch(function () { return attempt('guest', pass); })
       .then(function (html) {
         if (remember) { try { localStorage.setItem(KEY, pass); } catch (e) {} }
         document.open();
@@ -135,7 +144,7 @@
         try { localStorage.removeItem(KEY); } catch (e) {}
         go.disabled = false;
         msg.className = 'msg';
-        msg.textContent = 'That passcode didn’t work.';
+        msg.textContent = 'That passcode didn\u2019t work.';
         pw.value = '';
         pw.focus();
       });
